@@ -1,0 +1,105 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    overflow: hidden;
+    background: #000;
+}
+
+.info-panel {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 15px;
+    border-radius: 10px;
+    z-index: 1000;
+}
+
+.info-panel h2 {
+    font-size: 18px;
+    margin-bottom: 10px;
+    color: #4facfe;
+}
+
+.marker-status {
+    display: flex;
+    justify-content: space-between;
+    margin: 10px 0;
+}
+
+.marker-label {
+    color: #ccc;
+}
+
+.marker-found {
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+.marker-not-found {
+    color: #f44336;
+}
+
+.instructions {
+    font-size: 14px;
+    margin-top: 15px;
+    padding: 10px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 5px;
+    line-height: 1.4;
+}
+
+.instructions p {
+    margin: 5px 0;
+}
+
+.field-info {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    right: 10px;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 15px;
+    border-radius: 10px;
+    z-index: 1000;
+}
+
+.coordinates {
+    font-family: monospace;
+    font-size: 12px;
+    margin: 10px 0;
+    line-height: 1.4;
+    background: rgba(255,255,255,0.1);
+    padding: 10px;
+    border-radius: 5px;
+}
+
+.btn {
+    width: 100%;
+    padding: 10px;
+    background: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    font-size: 16px;
+    cursor: pointer;
+    margin-top: 10px;
+    transition: background 0.3s;
+}
+
+.btn:hover {
+    background: #45a049;
+}
+
+.btn:disabled {
+    background: #666;
+    cursor: not-allowed;
+}
