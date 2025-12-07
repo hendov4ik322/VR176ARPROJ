@@ -1,114 +1,180 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
-  </head>
-  <body style="margin: 0; overflow: hidden;">
-    <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false" vr-mode-ui="enabled: false">
+<head>
+  <meta charset="utf-8">
+  <title>AR Object Detection in Bounded Field</title>
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+  <!-- Line component for drawing bounding boxes -->
+  <script src="https://unpkg.com/aframe-line-component@1.1.1/dist/aframe-line-component.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    .arjs-loader {
+      height: 100%;
+      width: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      background-color: rgba(0, 0, 0, 0.8);
+      z-index: 9999;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      font-family: sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div class="arjs-loader" id="loader">Loading model...</div>
 
-      <!-- Маркеры для поля -->
-      <a-marker type="pattern" url="pattern-LeftUp.patt" id="marker1"></a-marker>
-      <a-marker type="pattern" url="pattern-RightDown.patt" id="marker2"></a-marker>
+  <a-scene
+    embedded
+    arjs="sourceType: webcam; debugUIEnabled: false"
+    vr-mode-ui="enabled: false"
+    renderer="logarithmicDepthBuffer: true"
+  >
+    <!-- Markers -->
+    <a-marker type="pattern" url="pattern-LeftUp.patt" id="marker1"></a-marker>
+    <a-marker type="pattern" url="pattern-RightDown.patt" id="marker2"></a-marker>
 
-      <!-- Поле -->
-      <a-plane id="field" color="lime" opacity="0.3" rotation="-90 0 0" visible="false"></a-plane>
+    <!-- Field plane (for debugging, optional) -->
+    <a-plane id="field" color="lime" opacity="0.2" rotation="-90 0 0" visible="false"></a-plane>
 
-      <!-- Камера -->
-      <a-entity camera></a-entity>
+    <!-- Camera -->
+    <a-entity camera></a-entity>
 
-      <!-- Контейнер для обводки -->
-      <a-entity id="boxes"></a-entity>
+    <!-- Container for bounding boxes -->
+    <a-entity id="boxes"></a-entity>
+  </a-scene>
 
-      <script>
-        let model;
-        const marker1 = document.querySelector('#marker1');
-        const marker2 = document.querySelector('#marker2');
-        const field = document.querySelector('#field');
-        const boxesContainer = document.querySelector('#boxes');
+  <script>
+    // Wait for A-Frame scene to be ready
+    document.querySelector('a-scene').addEventListener('loaded', () => {
+      initARObjectDetection();
+    });
 
-        async function loadModel() {
-          model = await cocoSsd.load();
-          console.log('Model loaded');
-          detectObjects();
+    async function initARObjectDetection() {
+      let model;
+      const loader = document.getElementById('loader');
+      const marker1 = document.getElementById('marker1');
+      const marker2 = document.getElementById('marker2');
+      const field = document.getElementById('field');
+      const boxesContainer = document.getElementById('boxes');
+
+      // Load COCO-SSD model
+      try {
+        model = await cocoSsd.load();
+        loader.style.display = 'none';
+        console.log('✅ Model loaded');
+      } catch (e) {
+        console.error('❌ Failed to load model:', e);
+        loader.textContent = 'Failed to load detection model';
+        return;
+      }
+
+      // Vectors for world positions
+      const pos1 = new THREE.Vector3();
+      const pos2 = new THREE.Vector3();
+
+      // Update field between markers
+      function updateField() {
+        const m1Visible = marker1.object3D.visible;
+        const m2Visible = marker2.object3D.visible;
+
+        if (m1Visible && m2Visible) {
+          marker1.object3D.getWorldPosition(pos1);
+          marker2.object3D.getWorldPosition(pos2);
+
+          const center = new THREE.Vector3()
+            .addVectors(pos1, pos2)
+            .multiplyScalar(0.5);
+
+          const width = pos1.distanceTo(pos2); // Diagonal, but we project to XZ
+          // For simplicity, assume markers define opposite corners on a flat plane
+          // We'll use X and Z only (Y is height)
+          const sizeX = Math.abs(pos1.x - pos2.x);
+          const sizeZ = Math.abs(pos1.z - pos2.z);
+
+          field.setAttribute('position', { x: center.x, y: 0, z: center.z });
+          field.setAttribute('scale', { x: Math.max(sizeX, 0.1), y: Math.max(sizeZ, 0.1), z: 1 });
+          field.setAttribute('visible', true);
+        } else {
+          field.setAttribute('visible', false);
         }
 
-        // Обновление позиции и масштаба поля между маркерами
-        function updateField() {
-          const m1Visible = marker1.object3D.visible;
-          const m2Visible = marker2.object3D.visible;
-        
-          if (m1Visible && m2Visible) {
-            const pos1 = marker1.object3D.position;
-            const pos2 = marker2.object3D.position;
-          
-            const center = {
-              x: (pos1.x + pos2.x) / 2,
-              y: (pos1.y + pos2.y) / 2,
-              z: (pos1.z + pos2.z) / 2
-            };
-          
-            const width = Math.abs(pos1.x - pos2.x);
-            const depth = Math.abs(pos1.y - pos2.y);
-          
-            field.setAttribute('position', center);
-            field.setAttribute('rotation', '-90 0 0'); 
-            field.setAttribute('scale', `${width} ${depth} 1`);
-            field.setAttribute('visible', true);
-          } else {
-            field.setAttribute('visible', false);
-          }
-        
-          requestAnimationFrame(updateField);
+        requestAnimationFrame(updateField);
+      }
+
+      updateField();
+
+      // Object detection loop
+      async function detectObjects() {
+        const video = document.querySelector('video');
+        if (!model || !video || video.readyState < 2) {
+          requestAnimationFrame(detectObjects);
+          return;
         }
 
-        updateField();
+        // Clear previous boxes
+        boxesContainer.innerHTML = '';
 
-        async function detectObjects() {
-          const video = document.querySelector('video');
-          if (!model || !video || video.readyState < 2) {
-            requestAnimationFrame(detectObjects);
-            return;
-          }
+        // Only draw if field is visible
+        if (!field.getAttribute('visible')) {
+          requestAnimationFrame(detectObjects);
+          return;
+        }
 
+        try {
           const predictions = await model.detect(video);
 
-          // Очистка предыдущих линий
-          boxesContainer.innerHTML = '';
+          const fieldPos = field.object3D.position.clone();
+          const scale = field.getAttribute('scale');
+          const width = scale.x;
+          const depth = scale.z;
 
-          if (field.object3D.visible) {
-            const fieldPos = field.object3D.position;
-            const fieldScale = field.getAttribute('scale');
+          // Video dimensions
+          const vw = video.videoWidth || 640;
+          const vh = video.videoHeight || 480;
 
-            predictions.forEach(pred => {
-              // Преобразуем координаты bbox в [-0.5,0.5] относительно поля
-              const x1 = (pred.bbox[0] / video.videoWidth - 0.5) * fieldScale.x;
-              const x2 = ((pred.bbox[0] + pred.bbox[2]) / video.videoWidth - 0.5) * fieldScale.x;
-              const z1 = (0.5 - pred.bbox[1] / video.videoHeight) * fieldScale.z;
-              const z2 = (0.5 - (pred.bbox[1] + pred.bbox[3]) / video.videoHeight) * fieldScale.z;
+          predictions.forEach(pred => {
+            // Normalize bbox to [0,1]
+            const [x, y, w, h] = pred.bbox;
 
-              // Создаем линию вокруг bbox
-              const points = [
-                `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}`,
-                `${fieldPos.x + x2} 0.01 ${fieldPos.z + z1}`,
-                `${fieldPos.x + x2} 0.01 ${fieldPos.z + z2}`,
-                `${fieldPos.x + x1} 0.01 ${fieldPos.z + z2}`,
-                `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}` // замкнуть контур
-              ].join(',');
+            // Map to field-local coordinates in XZ plane
+            // Video X → field X; Video Y → field Z (inverted)
+            const x1 = (x / vw - 0.5) * width;
+            const x2 = ((x + w) / vw - 0.5) * width;
+            const z1 = (0.5 - y / vh) * depth;
+            const z2 = (0.5 - (y + h) / vh) * depth;
 
-              const line = document.createElement('a-entity');
-              line.setAttribute('line', `points: ${points}; color: red;`);
-              boxesContainer.appendChild(line);
+            const points = [
+              `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}`,
+              `${fieldPos.x + x2} 0.01 ${fieldPos.z + z1}`,
+              `${fieldPos.x + x2} 0.01 ${fieldPos.z + z2}`,
+              `${fieldPos.x + x1} 0.01 ${fieldPos.z + z2}`,
+              `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}`
+            ].join(',');
+
+            const line = document.createElement('a-entity');
+            line.setAttribute('line', {
+              points: points,
+              color: 'red',
+              lineWidth: 2
             });
-          }
-
-          requestAnimationFrame(detectObjects);
+            boxesContainer.appendChild(line);
+          });
+        } catch (e) {
+          console.warn('Detection error (may be transient):', e);
         }
 
-        loadModel();
-      </script>
-    </a-scene>
-  </body>
+        requestAnimationFrame(detectObjects);
+      }
+
+      detectObjects();
+    }
+  </script>
+</body>
 </html>
