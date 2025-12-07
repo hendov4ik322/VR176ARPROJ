@@ -1,183 +1,102 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>AR YOLOv8 Segmentation</title>
-  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-  <style>
-    body { margin: 0; overflow: hidden; }
-    canvas.overlay { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 10; }
-  </style>
-</head>
-<body>
-<a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false" vr-mode-ui="enabled: false">
-  <a-marker type="pattern" url="pattern-LeftUp.patt" id="marker1"></a-marker>
-  <a-marker type="pattern" url="pattern-RightDown.patt" id="marker2"></a-marker>
-  <a-plane id="field" color="green" opacity="0.5" position="0 0 0" rotation="-90 0 0" visible="false"></a-plane>
-  <a-entity camera></a-entity>
-</a-scene>
+<html>
+  <head>
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+  </head>
+  <body style="margin: 0; overflow: hidden;">
+    <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false" vr-mode-ui="enabled: false">
 
-<script>
-let session, video, overlayCanvas, overlayCtx;
-const field = document.querySelector('#field');
-const marker1 = document.querySelector('#marker1');
-const marker2 = document.querySelector('#marker2');
-let fieldBounds = null;
+      <a-marker type="pattern" url="pattern-LeftUp.patt" id="marker1"></a-marker>
+      <a-marker type="pattern" url="pattern-RightDown.patt" id="marker2"></a-marker>
+      <a-plane id="field" color="green" opacity="0.3" position="0 0 0" rotation="-90 0 0" visible="false"></a-plane>
+      <a-entity camera></a-entity>
 
-// --- AR Field ---
-function updateField() {
-  const m1Visible = marker1.object3D.visible;
-  const m2Visible = marker2.object3D.visible;
+      <!-- Контейнер для обводки -->
+      <a-entity id="boxes"></a-entity>
 
-  if (m1Visible && m2Visible) {
-    const pos1 = marker1.object3D.position.clone();
-    const pos2 = marker2.object3D.position.clone();
+      <script>
+        let model;
+        const marker1 = document.querySelector('#marker1');
+        const marker2 = document.querySelector('#marker2');
+        const field = document.querySelector('#field');
+        const boxesContainer = document.querySelector('#boxes');
 
-    const center = pos1.clone().add(pos2).multiplyScalar(0.5);
-    const width = Math.max(Math.abs(pos1.x - pos2.x), 0.1);
-    const depth = Math.max(Math.abs(pos1.y - pos2.y), 0.1);
+        async function loadModel() {
+          model = await cocoSsd.load();
+          console.log('Model loaded');
+          detectObjects();
+        }
 
-    field.setAttribute('position', center);
-    field.setAttribute('scale', `${width} ${depth} 1`);
-    field.setAttribute('visible', true);
+        function updateField() {
+          const m1Visible = marker1.object3D.visible;
+          const m2Visible = marker2.object3D.visible;
+        
+          if (m1Visible && m2Visible) {
+            const pos1 = marker1.object3D.position;
+            const pos2 = marker2.object3D.position;
+          
+            const center = {
+              x: (pos1.x + pos2.x) / 2,
+              y: (pos1.y + pos2.y) / 2,
+              z: (pos1.z + pos2.z) / 2
+            };
+          
+            const width = Math.abs(pos1.x - pos2.x);
+            const depth = Math.abs(pos1.y - pos2.y);
+          
+            field.setAttribute('position', center);
+            field.setAttribute('rotation', '0 0 0'); 
+            field.setAttribute('scale', `${width} ${depth} 1`);
+            field.setAttribute('visible', true);
+          } else {
+            field.setAttribute('visible', false);
+          }
+        
+          requestAnimationFrame(updateField);
+        }
 
-    fieldBounds = { minX: Math.min(pos1.x, pos2.x), maxX: Math.max(pos1.x, pos2.x),
-                    minY: Math.min(pos1.y, pos2.y), maxY: Math.max(pos1.y, pos2.y) };
-  } else {
-    field.setAttribute('visible', false);
-    fieldBounds = null;
-  }
+        updateField();
 
-  requestAnimationFrame(updateField);
-}
+        async function detectObjects() {
+          const video = document.querySelector('video');
+          if (!model || !video || video.readyState < 2) {
+            requestAnimationFrame(detectObjects);
+            return;
+          }
 
-// --- Load YOLOv8 ONNX Model ---
-async function loadModel() {
-  try {
-    session = await ort.InferenceSession.create('./yolov8n-seg.onnx');
-    console.log('YOLOv8 Segmentation model loaded');
-  } catch (e) {
-    console.error('Failed to load YOLOv8 model', e);
-  }
-}
+          const predictions = await model.detect(video);
 
-// --- Initialize overlay canvas ---
-function initOverlay() {
-  video = document.querySelector('video');
-  if (!video) { setTimeout(initOverlay, 500); return; }
+          // Очистка предыдущих обводок
+          boxesContainer.innerHTML = '';
 
-  overlayCanvas = document.createElement('canvas');
-  overlayCanvas.classList.add('overlay');
-  overlayCanvas.width = video.videoWidth || window.innerWidth;
-  overlayCanvas.height = video.videoHeight || window.innerHeight;
-  overlayCtx = overlayCanvas.getContext('2d', { willReadFrequently: true });
-  document.body.appendChild(overlayCanvas);
+          predictions.forEach(pred => {
+            // Проверяем, попадает ли объект в поле
+            if (field.object3D.visible) {
+              const fieldPos = field.object3D.position;
+              const fieldScale = field.getAttribute('scale');
 
-  loadModel().then(detectLoop);
-}
+              const x = (pred.bbox[0] + pred.bbox[2]/2 - video.videoWidth/2) / video.videoWidth * fieldScale.x;
+              const z = (pred.bbox[1] + pred.bbox[3]/2 - video.videoHeight/2) / video.videoHeight * fieldScale.z;
 
-// --- Preprocess video frame ---
-function preprocessImage(video) {
-  const ctx = document.createElement('canvas').getContext('2d');
-  ctx.canvas.width = 640;
-  ctx.canvas.height = 640;
-  ctx.drawImage(video, 0, 0, 640, 640);
-  const data = ctx.getImageData(0, 0, 640, 640).data;
-  const floatData = new Float32Array(3 * 640 * 640);
-
-  for (let i = 0; i < 640*640; i++) {
-    floatData[i] = (data[i*4]/255 - 0.485)/0.229;         // R
-    floatData[640*640 + i] = (data[i*4+1]/255 - 0.456)/0.224; // G
-    floatData[2*640*640 + i] = (data[i*4+2]/255 - 0.406)/0.225; // B
-  }
-
-  return new ort.Tensor('float32', floatData, [1,3,640,640]);
-}
-
-// --- Detect & render ---
-async function detectLoop() {
-  if (!session || !video || video.videoWidth === 0) { requestAnimationFrame(detectLoop); return; }
-
-  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-  const inputTensor = preprocessImage(video);
-  const feeds = { images: inputTensor };
-
-  try {
-    const results = await session.run(feeds);
-    const output = results.output0;
-    const proto = results.output1;
-
-    const detections = output.data;
-    const numAnchors = output.dims[2];
-    const numAttrs = output.dims[1];
-
-    let best = null, bestConf = 0;
-
-    for (let i=0;i<numAnchors;i++){
-      const offset = i*numAttrs;
-      const cx=detections[offset], cy=detections[offset+1], w=detections[offset+2], h=detections[offset+3];
-      const objConf = detections[offset+4];
-      const classProbs = detections.subarray(offset+5, offset+85);
-      const maskCoeffs = detections.subarray(offset+85, offset+117);
-
-      let maxClass = 0, maxProb=0;
-      for(let j=0;j<80;j++){ if(classProbs[j]>maxProb){ maxProb=classProbs[j]; maxClass=j; } }
-      const conf = objConf*maxProb;
-      if(conf>bestConf && conf>0.25){ bestConf=conf; best={bbox:[cx,cy,w,h], maskCoeffs, classId:maxClass, conf}; }
-    }
-
-    if(best){
-      const [cx,cy,w,h]=best.bbox;
-      const x1=(cx-w/2)*640, y1=(cy-h/2)*640, x2=(cx+w/2)*640, y2=(cy+h/2)*640;
-      const scaleX=overlayCanvas.width/640, scaleY=overlayCanvas.height/640;
-      const px1=x1*scaleX, py1=y1*scaleY, pw=(x2-x1)*scaleX, ph=(y2-y1)*scaleY;
-
-      overlayCtx.strokeStyle='yellow';
-      overlayCtx.lineWidth=4;
-      overlayCtx.strokeRect(px1, py1, pw, ph);
-      overlayCtx.fillStyle='white';
-      overlayCtx.font='bold 18px Arial';
-      overlayCtx.fillText(`Obj ${best.classId} (${(best.conf*100).toFixed(1)}%)`, px1, py1-10);
-
-      // --- Render mask ---
-      if(proto){
-        // proto: [1,32,160,160], maskCoeffs: [32]
-        const protoData = proto.data;
-        const mask = new Float32Array(160*160);
-        for(let y=0;y<160;y++){
-          for(let x=0;x<160;x++){
-            let val=0;
-            for(let k=0;k<32;k++){
-              val += protoData[k*160*160 + y*160 + x]*best.maskCoeffs[k];
+              // Добавляем визуальную обводку
+              const box = document.createElement('a-box');
+              box.setAttribute('position', `${fieldPos.x + x} 0.01 ${fieldPos.z + z}`);
+              box.setAttribute('depth', '0.05');
+              box.setAttribute('height', '0.05');
+              box.setAttribute('width', '0.05');
+              box.setAttribute('color', 'red');
+              boxesContainer.appendChild(box);
             }
-            mask[y*160+x]=val;
-          }
+          });
+
+          requestAnimationFrame(detectObjects);
         }
 
-        const imageData = overlayCtx.createImageData(pw, ph);
-        for(let y=0;y<ph;y++){
-          for(let x=0;x<pw;x++){
-            const srcX=Math.floor(x*160/pw);
-            const srcY=Math.floor(y*160/ph);
-            const alpha=Math.min(Math.max(mask[srcY*160+srcX],0),1);
-            const idx=(y*pw+x)*4;
-            imageData.data[idx]=0;
-            imageData.data[idx+1]=255;
-            imageData.data[idx+2]=0;
-            imageData.data[idx+3]=alpha*100; // прозрачность маски
-          }
-        }
-        overlayCtx.putImageData(imageData, px1, py1);
-      }
-    }
-  } catch(e){ console.error('YOLO error', e); }
-
-  requestAnimationFrame(detectLoop);
-}
-
-window.addEventListener('load', () => { setTimeout(updateField, 500); initOverlay(); });
-</script>
-</body>
+        loadModel();
+      </script>
+    </a-scene>
+  </body>
 </html>
