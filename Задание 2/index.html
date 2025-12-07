@@ -18,143 +18,53 @@
       <a-entity camera></a-entity>
 
       <script>
-        // --- AR часть (ваша) ---
-        const marker1 = document.querySelector('#marker1');
-        const marker2 = document.querySelector('#marker2');
-        const field = document.querySelector('#field');
+      const marker1 = document.querySelector('#marker1');
+      const marker2 = document.querySelector('#marker2');
+      const field = document.querySelector('#field');
 
-        let fieldBounds = null; // { minX, maxX, minY, maxY } в 3D-координатах
+      function updateField() {
+        const m1Visible = marker1.object3D.visible;
+        const m2Visible = marker2.object3D.visible;
 
-        function updateField() {
-          const m1Visible = marker1.object3D.visible;
-          const m2Visible = marker2.object3D.visible;
+        if (m1Visible && m2Visible) {
+          const pos1 = marker1.object3D.position.clone();
+          const pos2 = marker2.object3D.position.clone();
 
-          if (m1Visible && m2.Visible) {
-            const pos1 = marker1.object3D.position;
-            const pos2 = marker2.object3D.position;
+          // Логируем позиции для отладки
+          console.log('Marker1:', pos1.toArray(), 'Marker2:', pos2.toArray());
 
-            const center = {
-              x: (pos1.x + pos2.x) / 2,
-              y: (pos1.y + pos2.y) / 2,
-              z: (pos1.z + pos2.z) / 2
-            };
+          const center = new THREE.Vector3()
+            .addVectors(pos1, pos2)
+            .multiplyScalar(0.5);
 
-            const width = Math.abs(pos1.x - pos2.x);
-            const depth = Math.abs(pos1.y - pos2.y);
+          // В AR.js плоскость должна лежать в плоскости маркеров.
+          // Обычно маркеры лежат в плоскости XZ (Y — высота), но AR.js использует Y-up.
+          // Поэтому ширина — по X, глубина — по Z, а не по Y!
+          const width = Math.abs(pos1.x - pos2.x);
+          const depth = Math.abs(pos1.z - pos2.z); // ← ВАЖНО: не Y, а Z!
 
-            field.setAttribute('position', center);
-            field.setAttribute('rotation', '0 0 0');
-            field.setAttribute('scale', `${width} ${depth} 1`);
-            field.setAttribute('visible', true);
+          // Минимальный размер, чтобы плоскость не исчезала
+          const minWidth = 0.1;
+          const minDepth = 0.1;
 
-            // Сохраняем границы поля в 3D
-            fieldBounds = {
-              minX: Math.min(pos1.x, pos2.x),
-              maxX: Math.max(pos1.x, pos2.x),
-              minY: Math.min(pos1.y, pos2.y),
-              maxY: Math.max(pos1.y, pos2.y)
-            };
-          } else {
-            field.setAttribute('visible', false);
-            fieldBounds = null;
-          }
+          field.setAttribute('position', center);
+          field.setAttribute('rotation', '-90 0 0'); // X-поворот, чтобы лежала как пол
+          field.setAttribute('scale', `${Math.max(width, minWidth)} ${Math.max(depth, minDepth)} 1`);
+          field.setAttribute('visible', true);
 
-          requestAnimationFrame(updateField);
+          console.log('Field updated:', { center, width, depth });
+        } else {
+          field.setAttribute('visible', false);
         }
 
-        updateField();
+        requestAnimationFrame(updateField);
+      }
 
-        // --- Computer Vision часть ---
-        let model;
-        let video;
-        let overlayCanvas;
-        let overlayCtx;
-
-        // Дожидаемся, пока AR.js создаст видеопоток
-        function initOverlay() {
-          // Ищем видео AR.js (обычно с id "arjs-video")
-          video = document.querySelector('video');
-          if (!video) {
-            setTimeout(initOverlay, 500);
-            return;
-          }
-
-          // Создаём canvas поверх сцены
-          overlayCanvas = document.createElement('canvas');
-          overlayCanvas.style.position = 'absolute';
-          overlayCanvas.style.top = '0';
-          overlayCanvas.style.left = '0';
-          overlayCanvas.style.pointerEvents = 'none';
-          overlayCanvas.width = video.videoWidth || window.innerWidth;
-          overlayCanvas.height = video.videoHeight || window.innerHeight;
-          document.body.appendChild(overlayCanvas);
-          overlayCtx = overlayCanvas.getContext('2d');
-
-          // Загружаем модель
-          cocoSsd.load().then(net => {
-            model = net;
-            detectLoop();
-          });
-        }
-
-        async function detectLoop() {
-          if (!model || !video || video.videoWidth === 0) {
-            requestAnimationFrame(detectLoop);
-            return;
-          }
-
-          // Делаем предсказание
-          const predictions = await model.detect(video);
-
-          // Очищаем оверлей
-          overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-          // Проходим по предсказаниям
-          for (const pred of predictions) {
-            if (pred.class === 'cup' || pred.class === 'bottle' || pred.score > 0.6) {
-              const { bbox } = pred; // [x, y, width, height]
-
-              // --- Преобразуем 2D bbox в 3D координаты?
-              // Но у нас нет глубины. Поэтому просто проверяем,
-              // находится ли центр bbox в проекции поля.
-
-              // Альтернатива: показываем bbox всегда, но подсвечиваем, если внутри поля
-              const centerX = bbox[0] + bbox[2] / 2;
-              const centerY = bbox[1] + bbox[3] / 2;
-
-              // Преобразуем пиксели в 3D? → Слишком сложно без калибровки камеры.
-              // Вместо этого: если поле видно — показываем маску с подписью "IN FIELD"
-              let inField = false;
-              if (fieldBounds) {
-                // Упрощённо: если поле есть, считаем, что объект "в поле"
-                // (в реальности нужно проецировать 3D→2D)
-                inField = true;
-              }
-
-              // Рисуем рамку
-              overlayCtx.strokeStyle = inField ? 'lime' : 'red';
-              overlayCtx.lineWidth = 3;
-              overlayCtx.strokeRect(...bbox);
-
-              // Рисуем полупрозрачную маску (заливка)
-              overlayCtx.fillStyle = inField ? 'lime' : 'red';
-              overlayCtx.globalAlpha = inField ? 0.3 : 0.1;
-              overlayCtx.fillRect(...bbox);
-              overlayCtx.globalAlpha = 1.0;
-
-              // Подпись
-              overlayCtx.fillStyle = 'white';
-              overlayCtx.font = '16px Arial';
-              overlayCtx.fillText(
-                `${pred.class} (${(pred.score * 100).toFixed(1)}%) ${inField ? '[IN FIELD]' : ''}`,
-                bbox[0],
-                bbox[1] > 20 ? bbox[1] - 5 : bbox[1] + 15
-              );
-            }
-          }
-
-          requestAnimationFrame(detectLoop);
-        }
+      // Дожидаемся инициализации сцены
+      window.addEventListener('load', () => {
+        setTimeout(updateField, 1000); // Запускаем с задержкой, чтобы A-Frame успел создать объекты
+      });
+    </script>
 
         // Запуск после загрузки DOM
         window.addEventListener('load', initOverlay);
