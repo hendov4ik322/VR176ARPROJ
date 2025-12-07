@@ -105,86 +105,98 @@
         });
       }
 
-      async function detectLoop() {
-        if (!session || !video || video.videoWidth === 0) {
+          async function detectLoop() {
+      if (!session || !video || video.videoWidth === 0) {
+        requestAnimationFrame(detectLoop);
+        return;
+      }
+
+      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+      const inputTensor = preprocessImage(video);
+      const feeds = { images: inputTensor };
+      try {
+        const results = await session.run(feeds);
+
+        // 🔥 ЛОГИРУЕМ ВСЕ ТЕНЗОРЫ, ЧТОБЫ УЗНАТЬ, КАК НАЗЫВАЮТСЯ
+        console.log("Все тензоры из ONNX:", Object.keys(results));
+
+        // Попробуем найти тензор с bbox
+        let outputTensor = results.output || results.output0; // Попробуем разные имена
+
+        if (!outputTensor) {
+          console.error("Не найден тензор с результатами (output/output0)");
           requestAnimationFrame(detectLoop);
           return;
         }
 
-        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        console.log("Output shape:", outputTensor.dims);
 
-        const inputTensor = preprocessImage(video);
-        const feeds = { images: inputTensor };
-        try {
-          const results = await session.run(feeds);
+        const output = outputTensor;
+        const detections = output.data; // Это плоский Float32Array
+        const numBoxes = output.dims[1]; // обычно 300
 
-          console.log("Output shape:", results.output.dims);
-
-          const output = results.output;
-          const detections = output.data; // Это плоский Float32Array
-          const numBoxes = output.dims[1]; // обычно 300
-
-          // Найдём первый объект с уверенностью > 0.3
-          let bestDetection = null;
-          for (let i = 0; i < numBoxes; i++) {
-            const offset = i * 116; // 116 - длина одного бокса (bbox + conf + class + mask_idx)
-            const conf = detections[offset + 4];
-            if (conf > 0.3) { // Понизили порог
-              bestDetection = {
-                bbox: [
-                  detections[offset + 0], // cx
-                  detections[offset + 1], // cy
-                  detections[offset + 2], // w
-                  detections[offset + 3], // h
-                ],
-                conf: conf,
-                classId: detections[offset + 5],
-              };
-              break;
-            }
+        // Найдём первый объект с уверенностью > 0.3
+        let bestDetection = null;
+        for (let i = 0; i < numBoxes; i++) {
+          const offset = i * 116; // 116 - длина одного бокса (bbox + conf + class + mask_idx)
+          const conf = detections[offset + 4];
+          if (conf > 0.3) { // Понизили порог
+            bestDetection = {
+              bbox: [
+                detections[offset + 0], // cx
+                detections[offset + 1], // cy
+                detections[offset + 2], // w
+                detections[offset + 3], // h
+              ],
+              conf: conf,
+              classId: detections[offset + 5],
+            };
+            break;
           }
-
-          if (bestDetection) {
-            const [cx, cy, w, h] = bestDetection.bbox;
-            // Переводим нормализованные координаты (0-1) в пиксельные (640x640)
-            const x1 = (cx - w / 2) * 640;
-            const y1 = (cy - h / 2) * 640;
-            const x2 = (cx + w / 2) * 640;
-            const y2 = (cy + h / 2) * 640;
-
-            // Переводим 640x640 в размеры overlayCanvas
-            const scaleX = overlayCanvas.width / 640;
-            const scaleY = overlayCanvas.height / 640;
-
-            const px1 = x1 * scaleX;
-            const py1 = y1 * scaleY;
-            const pw = (x2 - x1) * scaleX;
-            const ph = (y2 - y1) * scaleY;
-
-            // Жирная рамка
-            overlayCtx.strokeStyle = 'yellow';
-            overlayCtx.lineWidth = 4;
-            overlayCtx.strokeRect(px1, py1, pw, ph);
-
-            // "Ебаная маска" — заливка полупрозрачным цветом
-            overlayCtx.fillStyle = 'rgba(0, 255, 0, 0.4)';
-            overlayCtx.fillRect(px1, py1, pw, ph);
-
-            // Подпись
-            overlayCtx.fillStyle = 'white';
-            overlayCtx.font = 'bold 18px Arial';
-            overlayCtx.fillText(`Obj ${bestDetection.classId.toFixed(0)} (${(bestDetection.conf * 100).toFixed(1)}%)`, px1, py1 - 10);
-
-            console.log("Найден объект:", bestDetection);
-          } else {
-            console.log("Объект не найден (conf < 0.3)");
-          }
-        } catch (e) {
-          console.error("Ошибка при обработке ONNX:", e);
         }
 
-        requestAnimationFrame(detectLoop);
+        if (bestDetection) {
+          const [cx, cy, w, h] = bestDetection.bbox;
+          // Переводим нормализованные координаты (0-1) в пиксельные (640x640)
+          const x1 = (cx - w / 2) * 640;
+          const y1 = (cy - h / 2) * 640;
+          const x2 = (cx + w / 2) * 640;
+          const y2 = (cy + h / 2) * 640;
+
+          // Переводим 640x640 в размеры overlayCanvas
+          const scaleX = overlayCanvas.width / 640;
+          const scaleY = overlayCanvas.height / 640;
+
+          const px1 = x1 * scaleX;
+          const py1 = y1 * scaleY;
+          const pw = (x2 - x1) * scaleX;
+          const ph = (y2 - y1) * scaleY;
+
+          // Жирная рамка
+          overlayCtx.strokeStyle = 'yellow';
+          overlayCtx.lineWidth = 4;
+          overlayCtx.strokeRect(px1, py1, pw, ph);
+
+          // "Ебаная маска" — заливка полупрозрачным цветом
+          overlayCtx.fillStyle = 'rgba(0, 255, 0, 0.4)';
+          overlayCtx.fillRect(px1, py1, pw, ph);
+
+          // Подпись
+          overlayCtx.fillStyle = 'white';
+          overlayCtx.font = 'bold 18px Arial';
+          overlayCtx.fillText(`Obj ${bestDetection.classId.toFixed(0)} (${(bestDetection.conf * 100).toFixed(1)}%)`, px1, py1 - 10);
+
+          console.log("Найден объект:", bestDetection);
+        } else {
+          console.log("Объект не найден (conf < 0.3)");
+        }
+      } catch (e) {
+        console.error("Ошибка при обработке ONNX:", e);
       }
+
+      requestAnimationFrame(detectLoop);
+    }
 
       function preprocessImage(video) {
         const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
