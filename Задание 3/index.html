@@ -86,7 +86,7 @@
         </a-marker>
         
         <!-- Поле (плоскость) -->
-        <a-plane id="field" color="green" opacity="0.3" position="0 0 0" rotation="-90 0 0" visible="false"></a-plane>
+        <a-plane id="field" color="green" opacity="0.3" position="0 0 0" rotation="0 0 0" visible="false"></a-plane>
 
         <!-- Контейнер для всех AR-обводок объектов -->
         <a-entity id="objectHighlights"></a-entity>
@@ -161,7 +161,7 @@
                     };
                 
                     const width = Math.abs(pos1.x - pos2.x);
-                    const depth = Math.abs(pos1.z - pos2.z);
+                    const depth = Math.abs(pos1.y - pos2.y);
                 
                     field.setAttribute('position', `${center.x} ${center.y} ${center.z}`);
                     field.setAttribute('scale', `${width} ${depth} 1`);
