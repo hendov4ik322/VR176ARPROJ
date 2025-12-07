@@ -9,57 +9,106 @@
   <body style="margin: 0; overflow: hidden;">
     <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false" vr-mode-ui="enabled: false">
 
+      <!-- Маркеры для поля -->
       <a-marker type="pattern" url="pattern-LeftUp.patt" id="marker1"></a-marker>
       <a-marker type="pattern" url="pattern-RightDown.patt" id="marker2"></a-marker>
-      <a-plane id="field" color="green" opacity="0.3" position="0 0 0" rotation="-90 0 0" visible="false"></a-plane>
+
+      <!-- Поле -->
+      <a-plane id="field" color="lime" opacity="0.3" rotation="-90 0 0" visible="false"></a-plane>
+
+      <!-- Камера -->
       <a-entity camera></a-entity>
 
       <!-- Контейнер для обводки -->
       <a-entity id="boxes"></a-entity>
 
       <script>
-async function detectObjects() {
-  const video = document.querySelector('video');
-  if (!model || !video || video.readyState < 2) {
-    requestAnimationFrame(detectObjects);
-    return;
-  }
+        let model;
+        const marker1 = document.querySelector('#marker1');
+        const marker2 = document.querySelector('#marker2');
+        const field = document.querySelector('#field');
+        const boxesContainer = document.querySelector('#boxes');
 
-  const predictions = await model.detect(video);
+        async function loadModel() {
+          model = await cocoSsd.load();
+          console.log('Model loaded');
+          detectObjects();
+        }
 
-  // Очистка предыдущих линий
-  boxesContainer.innerHTML = '';
+        // Обновление позиции и масштаба поля между маркерами
+        function updateField() {
+          const m1Visible = marker1.object3D.visible;
+          const m2Visible = marker2.object3D.visible;
+        
+          if (m1Visible && m2Visible) {
+            const pos1 = marker1.object3D.position;
+            const pos2 = marker2.object3D.position;
+          
+            const center = {
+              x: (pos1.x + pos2.x) / 2,
+              y: (pos1.y + pos2.y) / 2,
+              z: (pos1.z + pos2.z) / 2
+            };
+          
+            const width = Math.abs(pos1.x - pos2.x);
+            const depth = Math.abs(pos1.y - pos2.y);
+          
+            field.setAttribute('position', center);
+            field.setAttribute('rotation', '-90 0 0'); 
+            field.setAttribute('scale', `${width} ${depth} 1`);
+            field.setAttribute('visible', true);
+          } else {
+            field.setAttribute('visible', false);
+          }
+        
+          requestAnimationFrame(updateField);
+        }
 
-  if (field.object3D.visible) {
-    const fieldPos = field.object3D.position;
-    const fieldScale = field.getAttribute('scale');
+        updateField();
 
-    predictions.forEach(pred => {
-      // Преобразуем координаты bbox в [-0.5,0.5] относительно поля
-      const x1 = (pred.bbox[0] / video.videoWidth - 0.5) * fieldScale.x;
-      const x2 = ((pred.bbox[0] + pred.bbox[2]) / video.videoWidth - 0.5) * fieldScale.x;
-      const z1 = (0.5 - pred.bbox[1] / video.videoHeight) * fieldScale.z;
-      const z2 = (0.5 - (pred.bbox[1] + pred.bbox[3]) / video.videoHeight) * fieldScale.z;
+        async function detectObjects() {
+          const video = document.querySelector('video');
+          if (!model || !video || video.readyState < 2) {
+            requestAnimationFrame(detectObjects);
+            return;
+          }
 
-      // Создаем линию вокруг bbox
-      const points = [
-        `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}`,
-        `${fieldPos.x + x2} 0.01 ${fieldPos.z + z1}`,
-        `${fieldPos.x + x2} 0.01 ${fieldPos.z + z2}`,
-        `${fieldPos.x + x1} 0.01 ${fieldPos.z + z2}`,
-        `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}` // замкнуть контур
-      ].join(',');
+          const predictions = await model.detect(video);
 
-      const line = document.createElement('a-entity');
-      line.setAttribute('line', `points: ${points}; color: red;`);
-      boxesContainer.appendChild(line);
-    });
-  }
+          // Очистка предыдущих линий
+          boxesContainer.innerHTML = '';
 
-  requestAnimationFrame(detectObjects);
-}
-</script>
+          if (field.object3D.visible) {
+            const fieldPos = field.object3D.position;
+            const fieldScale = field.getAttribute('scale');
 
+            predictions.forEach(pred => {
+              // Преобразуем координаты bbox в [-0.5,0.5] относительно поля
+              const x1 = (pred.bbox[0] / video.videoWidth - 0.5) * fieldScale.x;
+              const x2 = ((pred.bbox[0] + pred.bbox[2]) / video.videoWidth - 0.5) * fieldScale.x;
+              const z1 = (0.5 - pred.bbox[1] / video.videoHeight) * fieldScale.z;
+              const z2 = (0.5 - (pred.bbox[1] + pred.bbox[3]) / video.videoHeight) * fieldScale.z;
+
+              // Создаем линию вокруг bbox
+              const points = [
+                `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}`,
+                `${fieldPos.x + x2} 0.01 ${fieldPos.z + z1}`,
+                `${fieldPos.x + x2} 0.01 ${fieldPos.z + z2}`,
+                `${fieldPos.x + x1} 0.01 ${fieldPos.z + z2}`,
+                `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}` // замкнуть контур
+              ].join(',');
+
+              const line = document.createElement('a-entity');
+              line.setAttribute('line', `points: ${points}; color: red;`);
+              boxesContainer.appendChild(line);
+            });
+          }
+
+          requestAnimationFrame(detectObjects);
+        }
+
+        loadModel();
+      </script>
     </a-scene>
   </body>
 </html>
