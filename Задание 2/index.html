@@ -95,8 +95,11 @@
         overlayCanvas.style.pointerEvents = 'none';
         overlayCanvas.width = video.videoWidth || window.innerWidth;
         overlayCanvas.height = video.videoHeight || window.innerHeight;
+
+        // 🔧 ИСПРАВЛЕНИЕ: Добавляем willReadFrequently
+        overlayCtx = overlayCanvas.getContext('2d', { willReadFrequently: true });
+
         document.body.appendChild(overlayCanvas);
-        overlayCtx = overlayCanvas.getContext('2d');
 
         loadModel().then(() => {
           detectLoop();
@@ -115,23 +118,9 @@
         const feeds = { images: inputTensor };
         const results = await session.run(feeds);
 
-        const output = results.output; // [batch, num_detections, 37, 8400] или [batch, num_detections, 116, 8400] — зависит от модели
-
-        // Обработка масок и bbox
-        const masks = output.dims[2] > 100 ? output.data : null; // Упрощённо — маски могут быть в другом тензоре
-
-        // В ONNX YOLOv8-seg маски могут быть в отдельном тензоре, например `proto`
-        // В реальном примере нужно будет правильно распаковать маски и bbox
-        // Для упрощения, покажем bbox и маску первого объекта с высокой уверенностью
-
-        // В браузере YOLOv8-seg ONNX может быть сложен в обработке масок
-        // Поэтому мы будем использовать bbox + наложение маски из proto (если доступна)
-
-        // Пример: маска — это 32x160x160, proto — 1x160x160
-        // Упрощаем: рисуем маску как bbox, но с заливкой (для демонстрации)
-        // Для полной маски нужно будет распаковать proto + masks и перемножить
-
-        const boxes = results.output.data.slice(0, 7); // [x1, y1, x2, y2, conf, class_id, mask_idx]
+        // Упрощённый вывод (bbox + заливка)
+        const output = results.output; // [batch, num_detections, 116, 8400]
+        const boxes = output.data.slice(0, 7); // [x1, y1, x2, y2, conf, class_id, mask_idx]
         const conf = boxes[4];
         const cls = boxes[5];
         const maskIdx = boxes[6];
@@ -160,7 +149,7 @@
       }
 
       function preprocessImage(video) {
-        const ctx = document.createElement('canvas').getContext('2d');
+        const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
         ctx.canvas.width = 640;
         ctx.canvas.height = 640;
         ctx.drawImage(video, 0, 0, 640, 640);
