@@ -1,131 +1,157 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>AR Object Detection — Fixed Lines</title>
-  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
-  <style> body { margin: 0; overflow: hidden; } </style>
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
 </head>
-<body>
-  <div id="loader" style="position:fixed; top:0; left:0; width:100%; height:100%; background:black; color:white; display:flex; justify-content:center; align-items:center; z-index:9999;">
-    Loading model...
-  </div>
+<body style="margin: 0; overflow: hidden;">
+    <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false" vr-mode-ui="enabled: false">
 
-  <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false" vr-mode-ui="enabled: false">
-    <a-marker type="pattern" url="pattern-LeftUp.patt" id="marker1"></a-marker>
-    <a-marker type="pattern" url="pattern-RightDown.patt" id="marker2"></a-marker>
-    <a-plane id="field" color="lime" opacity="0.2" rotation="-90 0 0" visible="false"></a-plane>
-    <a-entity camera></a-entity>
-    <a-entity id="boxes"></a-entity>
-  </a-scene>
+        <!-- Маркеры для поля (2 угла) -->
+        <a-marker type="pattern" url="pattern-LeftUp.patt" id="marker1"></a-marker>
+        <a-marker type="pattern" url="pattern-RightDown.patt" id="marker2"></a-marker>
+        
+        <!-- Поле (плоскость) -->
+        <a-plane id="field" color="green" opacity="0.3" position="0 0 0" rotation="-90 0 0" visible="false"></a-plane>
 
-  <script>
-    document.querySelector('a-scene').addEventListener('loaded', () => {
-      initAR();
-    });
+        <!-- Контейнер для AR-обводки реального объекта -->
+        <a-entity id="objectHighlight"></a-entity>
 
-    function createLine(points, color = '#ff0000') {
-      const material = new THREE.LineBasicMaterial({ color: new THREE.Color(color) });
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const line = new THREE.Line(geometry, material);
-      const entity = document.createElement('a-entity');
-      entity.setObject3D('mesh', line); // 'mesh' или 'line' — но лучше 'mesh' для совместимости
-      return entity;
-    }
+        <a-entity camera></a-entity>
 
-    async function initAR() {
-      const loader = document.getElementById('loader');
-      const marker1 = document.getElementById('marker1');
-      const marker2 = document.getElementById('marker2');
-      const field = document.getElementById('field');
-      const boxesContainer = document.getElementById('boxes');
+        <script>
+            let model;
+            const marker1 = document.querySelector('#marker1');
+            const marker2 = document.querySelector('#marker2');
+            const field = document.querySelector('#field');
+            const objectHighlight = document.querySelector('#objectHighlight');
 
-      let model;
-      try {
-        model = await cocoSsd.load();
-        loader.style.display = 'none';
-      } catch (e) {
-        console.error('Model load failed:', e);
-        return;
-      }
+            // Объект, который мы ищем (кружка)
+            const TARGET_OBJECT = 'cup';
+            let detectedObject = null;
 
-      const pos1 = new THREE.Vector3();
-      const pos2 = new THREE.Vector3();
+            async function loadModel() {
+                model = await cocoSsd.load();
+                console.log('Model loaded');
+                detectObjects();
+            }
 
-      function updateField() {
-        if (marker1.object3D.visible && marker2.object3D.visible) {
-          marker1.object3D.getWorldPosition(pos1);
-          marker2.object3D.getWorldPosition(pos2);
+            function updateField() {
+                const m1Visible = marker1.object3D.visible;
+                const m2Visible = marker2.object3D.visible;
+            
+                if (m1Visible && m2Visible) {
+                    const pos1 = marker1.object3D.position;
+                    const pos2 = marker2.object3D.position;
+                
+                    const center = {
+                        x: (pos1.x + pos2.x) / 2,
+                        y: (pos1.y + pos2.y) / 2,
+                        z: (pos1.z + pos2.z) / 2
+                    };
+                
+                    const width = Math.abs(pos1.x - pos2.x);
+                    const depth = Math.abs(pos1.z - pos2.z);
+                
+                    field.setAttribute('position', center);
+                    field.setAttribute('scale', `${width} ${depth} 1`);
+                    field.setAttribute('visible', true);
+                } else {
+                    field.setAttribute('visible', false);
+                }
+            
+                requestAnimationFrame(updateField);
+            }
 
-          const center = new THREE.Vector3().addVectors(pos1, pos2).multiplyScalar(0.5);
-          const sizeX = Math.abs(pos1.x - pos2.x) || 0.1;
-          const sizeZ = Math.abs(pos1.z - pos2.z) || 0.1;
+            async function detectObjects() {
+                const video = document.querySelector('video');
+                if (!model || !video || video.readyState < 2) {
+                    requestAnimationFrame(detectObjects);
+                    return;
+                }
 
-          field.setAttribute('position', { x: center.x, y: 0, z: center.z });
-          field.setAttribute('scale', { x: sizeX, y: sizeZ, z: 1 });
-          field.setAttribute('visible', true);
-        } else {
-          field.setAttribute('visible', false);
-        }
-        requestAnimationFrame(updateField);
-      }
+                const predictions = await model.detect(video);
 
-      updateField();
+                // Очистка предыдущей обводки
+                objectHighlight.innerHTML = '';
 
-      async function detectObjects() {
-        const video = document.querySelector('video');
-        if (!model || !video || video.readyState < 2) {
-          requestAnimationFrame(detectObjects);
-          return;
-        }
+                // Поиск кружки среди распознанных объектов
+                detectedObject = predictions.find(pred => 
+                    pred.class === TARGET_OBJECT && pred.score > 0.7
+                );
 
-        boxesContainer.innerHTML = '';
+                if (detectedObject && field.object3D.visible) {
+                    // Получаем размеры поля
+                    const fieldPos = field.object3D.position;
+                    const fieldScale = field.getAttribute('scale');
+                    const fieldWidth = fieldScale.x;
+                    const fieldDepth = fieldScale.z;
 
-        if (!field.getAttribute('visible')) {
-          requestAnimationFrame(detectObjects);
-          return;
-        }
+                    // Преобразуем координаты 2D (экранные) в 3D (мир AR)
+                    // Центр объекта в пикселях
+                    const centerX = detectedObject.bbox[0] + detectedObject.bbox[2] / 2;
+                    const centerY = detectedObject.bbox[1] + detectedObject.bbox[3] / 2;
+                    
+                    // Нормализуем координаты от -1 до 1
+                    const normalizedX = (centerX / video.videoWidth) * 2 - 1;
+                    const normalizedY = (centerY / video.videoHeight) * 2 - 1;
+                    
+                    // Преобразуем в координаты поля
+                    const objectX = fieldPos.x + (normalizedX * fieldWidth / 2);
+                    const objectZ = fieldPos.z + (normalizedY * fieldDepth / 2);
+                    
+                    // Размеры объекта в метрах (оцениваем на основе bounding box)
+                    const objectWidth = (detectedObject.bbox[2] / video.videoWidth) * fieldWidth;
+                    const objectHeight = (detectedObject.bbox[3] / video.videoHeight) * fieldDepth;
 
-        try {
-          const predictions = await model.detect(video);
-          const fieldPos = field.object3D.position.clone();
-          const scale = field.getAttribute('scale');
-          const width = scale.x;
-          const depth = scale.z;
-          const vw = video.videoWidth || 640;
-          const vh = video.videoHeight || 480;
+                    // Создаем обводку вокруг реального объекта
+                    const highlight = document.createElement('a-entity');
+                    
+                    // Основная рамка (полая)
+                    const frame = document.createElement('a-plane');
+                    frame.setAttribute('width', objectWidth);
+                    frame.setAttribute('height', objectHeight);
+                    frame.setAttribute('color', '#00FF00');
+                    frame.setAttribute('opacity', '0.5');
+                    frame.setAttribute('position', `0 ${objectHeight/2 + 0.01} 0`);
+                    highlight.appendChild(frame);
+                    
+                    // Текст с названием объекта
+                    const text = document.createElement('a-text');
+                    text.setAttribute('value', `${detectedObject.class} (${Math.round(detectedObject.score * 100)}%)`);
+                    text.setAttribute('color', 'white');
+                    text.setAttribute('align', 'center');
+                    text.setAttribute('position', `0 ${objectHeight + 0.05} 0`);
+                    text.setAttribute('scale', '0.3 0.3 0.3');
+                    highlight.appendChild(text);
+                    
+                    // Устанавливаем позицию обводки
+                    highlight.setAttribute('position', `${objectX} 0.01 ${objectZ}`);
+                    
+                    objectHighlight.appendChild(highlight);
 
-          predictions.forEach(pred => {
-            const [x, y, w, h] = pred.bbox;
+                    console.log(`Объект найден: ${detectedObject.class}`);
+                    console.log(`Позиция в AR: x=${objectX.toFixed(2)}, z=${objectZ.toFixed(2)}`);
+                    console.log(`Размеры: ${objectWidth.toFixed(2)}m x ${objectHeight.toFixed(2)}m`);
+                }
 
-            const x1 = (x / vw - 0.5) * width;
-            const x2 = ((x + w) / vw - 0.5) * width;
-            const z1 = (0.5 - y / vh) * depth;
-            const z2 = (0.5 - (y + h) / vh) * depth;
+                requestAnimationFrame(detectObjects);
+            }
 
-            const points = [
-              new THREE.Vector3(fieldPos.x + x1, 0.01, fieldPos.z + z1),
-              new THREE.Vector3(fieldPos.x + x2, 0.01, fieldPos.z + z1),
-              new THREE.Vector3(fieldPos.x + x2, 0.01, fieldPos.z + z2),
-              new THREE.Vector3(fieldPos.x + x1, 0.01, fieldPos.z + z2),
-              new THREE.Vector3(fieldPos.x + x1, 0.01, fieldPos.z + z1)
-            ];
+            // Инициализация
+            loadModel();
+            updateField();
 
-            const lineEnt = createLine(points, '#ff0000');
-            boxesContainer.appendChild(lineEnt);
-          });
-        } catch (e) {
-          console.warn('Detection error:', e);
-        }
+            // Информация для отладки
+            setInterval(() => {
+                if (detectedObject) {
+                    console.log('Объект отслеживается:', detectedObject.class);
+                }
+            }, 3000);
 
-        requestAnimationFrame(detectObjects);
-      }
-
-      detectObjects();
-    }
-  </script>
+        </script>
+    </a-scene>
 </body>
 </html>
