@@ -41,7 +41,7 @@
           // Обычно маркеры лежат в плоскости XZ (Y — высота), но AR.js использует Y-up.
           // Поэтому ширина — по X, глубина — по Z, а не по Y!
           const width = Math.abs(pos1.x - pos2.x);
-          const depth = Math.abs(pos1.z - pos2.z); // ← ВАЖНО: не Y, а Z!
+          const depth = Math.abs(pos1.y - pos2.y); // ← ВАЖНО: не Y, а Z!
 
           // Минимальный размер, чтобы плоскость не исчезала
           const minWidth = 0.1;
