@@ -96,7 +96,6 @@
         overlayCanvas.width = video.videoWidth || window.innerWidth;
         overlayCanvas.height = video.videoHeight || window.innerHeight;
 
-        // 🔧 ИСПРАВЛЕНИЕ: Добавляем willReadFrequently
         overlayCtx = overlayCanvas.getContext('2d', { willReadFrequently: true });
 
         document.body.appendChild(overlayCanvas);
@@ -119,22 +118,16 @@
         try {
           const results = await session.run(feeds);
 
-          // Логируем структуру output для отладки
           console.log("Output shape:", results.output.dims);
 
-          // Упрощённый вывод (bbox + заливка)
-          // ONNX YOLOv8-seg output shape: [batch, num_detections, 116, 8400]
-          // 116 = [cx, cy, w, h, conf, class_id, ...mask_indices...]
           const output = results.output;
           const detections = output.data; // Это плоский Float32Array
-          const numDetections = output.dims[2]; // обычно 8400
-          const numClasses = 80;
-          const numBoxes = output.dims[1]; // обычно 1 (batch = 1)
+          const numBoxes = output.dims[1]; // обычно 300
 
           // Найдём первый объект с уверенностью > 0.3
           let bestDetection = null;
           for (let i = 0; i < numBoxes; i++) {
-            const offset = i * 116;
+            const offset = i * 116; // 116 - длина одного бокса (bbox + conf + class + mask_idx)
             const conf = detections[offset + 4];
             if (conf > 0.3) { // Понизили порог
               bestDetection = {
@@ -200,13 +193,12 @@
         ctx.drawImage(video, 0, 0, 640, 640);
 
         const imageData = ctx.getImageData(0, 0, 640, 640);
-        const floatView = new Float32Array(imageData.data.buffer);
+        const floatView = new Float32Array(3 * 640 * 640);
 
-        // Нормализация: (0-255) -> (0-1) -> (-1, 1)
-        for (let i = 0; i < floatView.length; i += 4) {
-          floatView[i] = (floatView[i] / 255.0 - 0.485) / 0.229;       // R
-          floatView[i + 1] = (floatView[i + 1] / 255.0 - 0.456) / 0.224; // G
-          floatView[i + 2] = (floatView[i + 2] / 255.0 - 0.406) / 0.225; // B
+        for (let i = 0; i < 640 * 640; i++) {
+          floatView[i] = (imageData.data[i * 4] / 255.0 - 0.485) / 0.229;       // R
+          floatView[640 * 640 + i] = (imageData.data[i * 4 + 1] / 255.0 - 0.456) / 0.224; // G
+          floatView[2 * 640 * 640 + i] = (imageData.data[i * 4 + 2] / 255.0 - 0.406) / 0.225; // B
         }
 
         return new ort.Tensor('float32', floatView, [1, 3, 640, 640]);
