@@ -1,268 +1,183 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-  </head>
-  <body style="margin: 0; overflow: hidden;">
-    <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false" vr-mode-ui="enabled: false">
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AR YOLOv8 Segmentation</title>
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas.overlay { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 10; }
+  </style>
+</head>
+<body>
+<a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false" vr-mode-ui="enabled: false">
+  <a-marker type="pattern" url="pattern-LeftUp.patt" id="marker1"></a-marker>
+  <a-marker type="pattern" url="pattern-RightDown.patt" id="marker2"></a-marker>
+  <a-plane id="field" color="green" opacity="0.5" position="0 0 0" rotation="-90 0 0" visible="false"></a-plane>
+  <a-entity camera></a-entity>
+</a-scene>
 
-      <a-marker type="pattern" url="pattern-LeftUp.patt" id="marker1"></a-marker>
-      <a-marker type="pattern" url="pattern-RightDown.patt" id="marker2"></a-marker>
+<script>
+let session, video, overlayCanvas, overlayCtx;
+const field = document.querySelector('#field');
+const marker1 = document.querySelector('#marker1');
+const marker2 = document.querySelector('#marker2');
+let fieldBounds = null;
 
-      <a-plane id="field" color="green" opacity="0.5" position="0 0 0" rotation="-90 0 0" visible="false"></a-plane>
+// --- AR Field ---
+function updateField() {
+  const m1Visible = marker1.object3D.visible;
+  const m2Visible = marker2.object3D.visible;
 
-      <a-entity camera></a-entity>
+  if (m1Visible && m2Visible) {
+    const pos1 = marker1.object3D.position.clone();
+    const pos2 = marker2.object3D.position.clone();
 
-    </a-scene>
+    const center = pos1.clone().add(pos2).multiplyScalar(0.5);
+    const width = Math.max(Math.abs(pos1.x - pos2.x), 0.1);
+    const depth = Math.max(Math.abs(pos1.y - pos2.y), 0.1);
 
-    <script>
-      // --- AR часть ---
-      const marker1 = document.querySelector('#marker1');
-      const marker2 = document.querySelector('#marker2');
-      const field = document.querySelector('#field');
+    field.setAttribute('position', center);
+    field.setAttribute('scale', `${width} ${depth} 1`);
+    field.setAttribute('visible', true);
 
-      let fieldBounds = null;
-
-      function updateField() {
-        const m1Visible = marker1.object3D.visible;
-        const m2Visible = marker2.object3D.visible;
-
-        if (m1Visible && m2Visible) {
-          const pos1 = marker1.object3D.position.clone();
-          const pos2 = marker2.object3D.position.clone();
-
-          const center = new THREE.Vector3()
-            .addVectors(pos1, pos2)
-            .multiplyScalar(0.5);
-
-          const width = Math.abs(pos1.x - pos2.x);
-          const depth = Math.abs(pos1.y - pos2.y);
-
-          const minWidth = 0.1;
-          const minDepth = 0.1;
-
-          field.setAttribute('position', center);
-          field.setAttribute('rotation', '0 0 0');
-          field.setAttribute('scale', `${Math.max(width, minWidth)} ${Math.max(depth, minDepth)} 1`);
-          field.setAttribute('visible', true);
-
-          fieldBounds = {
-            minX: Math.min(pos1.x, pos2.x),
-            maxX: Math.max(pos1.x, pos2.x),
-            minY: Math.min(pos1.y, pos2.y),
-            maxY: Math.max(pos1.y, pos2.y)
-          };
-        } else {
-          field.setAttribute('visible', false);
-          fieldBounds = null;
-        }
-
-        requestAnimationFrame(updateField);
-      }
-
-      window.addEventListener('load', () => {
-        setTimeout(updateField, 1000);
-      });
-
-      // --- YOLOv8 Сегментация ---
-      let session = null;
-      let video;
-      let overlayCanvas;
-      let overlayCtx;
-
-      async function loadModel() {
-        try {
-          session = await ort.InferenceSession.create('./yolov8n-seg.onnx');
-          console.log('YOLOv8 модель загружена');
-        } catch (e) {
-          console.error("Не удалось загрузить YOLOv8 модель:", e);
-        }
-      }
-
-      function initOverlay() {
-        video = document.querySelector('video');
-        if (!video) {
-          setTimeout(initOverlay, 500);
-          return;
-        }
-
-        overlayCanvas = document.createElement('canvas');
-        overlayCanvas.style.position = 'absolute';
-        overlayCanvas.style.top = '0';
-        overlayCanvas.style.left = '0';
-        overlayCanvas.style.pointerEvents = 'none';
-        overlayCanvas.width = video.videoWidth || window.innerWidth;
-        overlayCanvas.height = video.videoHeight || window.innerHeight;
-
-        overlayCtx = overlayCanvas.getContext('2d', { willReadFrequently: true });
-
-        document.body.appendChild(overlayCanvas);
-
-        loadModel().then(() => {
-          detectLoop();
-        });
-      }
-
-      async function detectLoop() {
-  if (!session || !video || video.videoWidth === 0) {
-    requestAnimationFrame(detectLoop);
-    return;
+    fieldBounds = { minX: Math.min(pos1.x, pos2.x), maxX: Math.max(pos1.x, pos2.x),
+                    minY: Math.min(pos1.y, pos2.y), maxY: Math.max(pos1.y, pos2.y) };
+  } else {
+    field.setAttribute('visible', false);
+    fieldBounds = null;
   }
+
+  requestAnimationFrame(updateField);
+}
+
+// --- Load YOLOv8 ONNX Model ---
+async function loadModel() {
+  try {
+    session = await ort.InferenceSession.create('./yolov8n-seg.onnx');
+    console.log('YOLOv8 Segmentation model loaded');
+  } catch (e) {
+    console.error('Failed to load YOLOv8 model', e);
+  }
+}
+
+// --- Initialize overlay canvas ---
+function initOverlay() {
+  video = document.querySelector('video');
+  if (!video) { setTimeout(initOverlay, 500); return; }
+
+  overlayCanvas = document.createElement('canvas');
+  overlayCanvas.classList.add('overlay');
+  overlayCanvas.width = video.videoWidth || window.innerWidth;
+  overlayCanvas.height = video.videoHeight || window.innerHeight;
+  overlayCtx = overlayCanvas.getContext('2d', { willReadFrequently: true });
+  document.body.appendChild(overlayCanvas);
+
+  loadModel().then(detectLoop);
+}
+
+// --- Preprocess video frame ---
+function preprocessImage(video) {
+  const ctx = document.createElement('canvas').getContext('2d');
+  ctx.canvas.width = 640;
+  ctx.canvas.height = 640;
+  ctx.drawImage(video, 0, 0, 640, 640);
+  const data = ctx.getImageData(0, 0, 640, 640).data;
+  const floatData = new Float32Array(3 * 640 * 640);
+
+  for (let i = 0; i < 640*640; i++) {
+    floatData[i] = (data[i*4]/255 - 0.485)/0.229;         // R
+    floatData[640*640 + i] = (data[i*4+1]/255 - 0.456)/0.224; // G
+    floatData[2*640*640 + i] = (data[i*4+2]/255 - 0.406)/0.225; // B
+  }
+
+  return new ort.Tensor('float32', floatData, [1,3,640,640]);
+}
+
+// --- Detect & render ---
+async function detectLoop() {
+  if (!session || !video || video.videoWidth === 0) { requestAnimationFrame(detectLoop); return; }
 
   overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
   const inputTensor = preprocessImage(video);
   const feeds = { images: inputTensor };
+
   try {
     const results = await session.run(feeds);
+    const output = results.output0;
+    const proto = results.output1;
 
-    console.log("Все тензоры из ONNX:", Object.keys(results));
+    const detections = output.data;
+    const numAnchors = output.dims[2];
+    const numAttrs = output.dims[1];
 
-    const outputTensor = results.output0;
-    const protoTensor = results.output1;
+    let best = null, bestConf = 0;
 
-    if (!outputTensor) {
-      console.error("Не найден тензор output0");
-      requestAnimationFrame(detectLoop);
-      return;
+    for (let i=0;i<numAnchors;i++){
+      const offset = i*numAttrs;
+      const cx=detections[offset], cy=detections[offset+1], w=detections[offset+2], h=detections[offset+3];
+      const objConf = detections[offset+4];
+      const classProbs = detections.subarray(offset+5, offset+85);
+      const maskCoeffs = detections.subarray(offset+85, offset+117);
+
+      let maxClass = 0, maxProb=0;
+      for(let j=0;j<80;j++){ if(classProbs[j]>maxProb){ maxProb=classProbs[j]; maxClass=j; } }
+      const conf = objConf*maxProb;
+      if(conf>bestConf && conf>0.25){ bestConf=conf; best={bbox:[cx,cy,w,h], maskCoeffs, classId:maxClass, conf}; }
     }
 
-    console.log("Output shape:", outputTensor.dims);
+    if(best){
+      const [cx,cy,w,h]=best.bbox;
+      const x1=(cx-w/2)*640, y1=(cy-h/2)*640, x2=(cx+w/2)*640, y2=(cy+h/2)*640;
+      const scaleX=overlayCanvas.width/640, scaleY=overlayCanvas.height/640;
+      const px1=x1*scaleX, py1=y1*scaleY, pw=(x2-x1)*scaleX, ph=(y2-y1)*scaleY;
 
-    const output = outputTensor;
-    const proto = protoTensor;
-
-    // В ONNX YOLOv8-seg (yolov8n-seg.onnx) output0.shape = [1, 116, 8400]
-    // 116 = 4 (bbox) + 1 (obj_conf) + 80 (class_probs) + 32 (mask_coeffs)
-    // 8400 — это количество anchors
-    const detections = output.data; // Float32Array
-    const numAnchors = output.dims[2]; // 8400
-    const numAttrs = output.dims[1]; // 116
-
-    let bestDetection = null;
-    let bestConf = 0;
-
-    for (let i = 0; i < numAnchors; i++) {
-      const offset = i * numAttrs;
-
-      // bbox: [cx, cy, w, h] - нормализованы к 640x640
-      const cx = detections[offset + 0];
-      const cy = detections[offset + 1];
-      const w = detections[offset + 2];
-      const h = detections[offset + 3];
-
-      // confidence
-      const objConf = detections[offset + 4];
-
-      // class probabilities (80 значений после 4+1)
-      const classProbs = detections.subarray(offset + 5, offset + 85);
-
-      // маска (32 коэффициента)
-      const maskCoeffs = detections.subarray(offset + 85, offset + 117);
-
-      // Находим класс с максимальной вероятностью
-      let maxClassId = 0;
-      let maxClassProb = 0;
-      for (let j = 0; j < 80; j++) {
-        if (classProbs[j] > maxClassProb) {
-          maxClassProb = classProbs[j];
-          maxClassId = j;
-        }
-      }
-
-      // Общая уверенность = obj_conf * max_class_prob
-      const conf = objConf * maxClassProb;
-
-      if (conf > bestConf && conf > 0.25) { // Порог уверенности
-        bestConf = conf;
-        bestDetection = {
-          bbox: [cx, cy, w, h],
-          conf: conf,
-          classId: maxClassId,
-          maskCoeffs: maskCoeffs
-        };
-      }
-    }
-
-    if (bestDetection) {
-      const [cx, cy, w, h] = bestDetection.bbox;
-
-      // Переводим нормализованные координаты (0-1) в пиксельные (640x640)
-      const x1 = (cx - w / 2) * 640;
-      const y1 = (cy - h / 2) * 640;
-      const x2 = (cx + w / 2) * 640;
-      const y2 = (cy + h / 2) * 640;
-
-      // Переводим 640x640 в размеры overlayCanvas
-      const scaleX = overlayCanvas.width / 640;
-      const scaleY = overlayCanvas.height / 640;
-
-      const px1 = x1 * scaleX;
-      const py1 = y1 * scaleY;
-      const pw = (x2 - x1) * scaleX;
-      const ph = (y2 - y1) * scaleY;
-
-      // Жирная рамка
-      overlayCtx.strokeStyle = 'yellow';
-      overlayCtx.lineWidth = 4;
+      overlayCtx.strokeStyle='yellow';
+      overlayCtx.lineWidth=4;
       overlayCtx.strokeRect(px1, py1, pw, ph);
+      overlayCtx.fillStyle='white';
+      overlayCtx.font='bold 18px Arial';
+      overlayCtx.fillText(`Obj ${best.classId} (${(best.conf*100).toFixed(1)}%)`, px1, py1-10);
 
-      // Подпись
-      overlayCtx.fillStyle = 'white';
-      overlayCtx.font = 'bold 18px Arial';
-      overlayCtx.fillText(`Obj ${bestDetection.classId} (${(bestDetection.conf * 100).toFixed(1)}%)`, px1, py1 - 10);
+      // --- Render mask ---
+      if(proto){
+        // proto: [1,32,160,160], maskCoeffs: [32]
+        const protoData = proto.data;
+        const mask = new Float32Array(160*160);
+        for(let y=0;y<160;y++){
+          for(let x=0;x<160;x++){
+            let val=0;
+            for(let k=0;k<32;k++){
+              val += protoData[k*160*160 + y*160 + x]*best.maskCoeffs[k];
+            }
+            mask[y*160+x]=val;
+          }
+        }
 
-      console.log("Найден объект:", bestDetection);
-
-      // --- Рендер маски ---
-      if (proto) {
-        // proto.shape = [1, 32, 160, 160]
-        // maskCoeffs = [32] - коэффициенты маски
-        // mask = proto[0] * maskCoeffs[0] + ... + proto[31] * maskCoeffs[31]
-        // Затем resize маски до bbox и наложение на canvas
-
-        // Псевдокод для маски:
-        // 1. Умножаем proto (160x160x32) на maskCoeffs (32) -> получаем маску 160x160
-        // 2. Resize маски до bbox (pw x ph)
-        // 3. Наложить на canvas как rgba(0,255,0,0.4) внутри bbox
-
-        // Это **очень сложный** шаг, требует много вычислений в браузере
-        // Для упрощения: просто нарисуем bbox как "маску"
-
-        overlayCtx.fillStyle = 'rgba(0, 255, 0, 0.3)';
-        overlayCtx.fillRect(px1, py1, pw, ph);
+        const imageData = overlayCtx.createImageData(pw, ph);
+        for(let y=0;y<ph;y++){
+          for(let x=0;x<pw;x++){
+            const srcX=Math.floor(x*160/pw);
+            const srcY=Math.floor(y*160/ph);
+            const alpha=Math.min(Math.max(mask[srcY*160+srcX],0),1);
+            const idx=(y*pw+x)*4;
+            imageData.data[idx]=0;
+            imageData.data[idx+1]=255;
+            imageData.data[idx+2]=0;
+            imageData.data[idx+3]=alpha*100; // прозрачность маски
+          }
+        }
+        overlayCtx.putImageData(imageData, px1, py1);
       }
-    } else {
-      console.log("Объект не найден (conf < 0.25)");
     }
-  } catch (e) {
-    console.error("Ошибка при обработке ONNX:", e);
-  }
+  } catch(e){ console.error('YOLO error', e); }
 
   requestAnimationFrame(detectLoop);
 }
 
-      function preprocessImage(video) {
-        const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-        ctx.canvas.width = 640;
-        ctx.canvas.height = 640;
-        ctx.drawImage(video, 0, 0, 640, 640);
-
-        const imageData = ctx.getImageData(0, 0, 640, 640);
-        const floatView = new Float32Array(3 * 640 * 640);
-
-        for (let i = 0; i < 640 * 640; i++) {
-          floatView[i] = (imageData.data[i * 4] / 255.0 - 0.485) / 0.229;       // R
-          floatView[640 * 640 + i] = (imageData.data[i * 4 + 1] / 255.0 - 0.456) / 0.224; // G
-          floatView[2 * 640 * 640 + i] = (imageData.data[i * 4 + 2] / 255.0 - 0.406) / 0.225; // B
-        }
-
-        return new ort.Tensor('float32', floatView, [1, 3, 640, 640]);
-      }
-
-      window.addEventListener('load', initOverlay);
-    </script>
-  </body>
+window.addEventListener('load', () => { setTimeout(updateField, 500); initOverlay(); });
+</script>
+</body>
 </html>
