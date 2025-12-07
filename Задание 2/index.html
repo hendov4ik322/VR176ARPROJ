@@ -18,85 +18,48 @@
       <a-entity id="boxes"></a-entity>
 
       <script>
-        let model;
-        const marker1 = document.querySelector('#marker1');
-        const marker2 = document.querySelector('#marker2');
-        const field = document.querySelector('#field');
-        const boxesContainer = document.querySelector('#boxes');
+async function detectObjects() {
+  const video = document.querySelector('video');
+  if (!model || !video || video.readyState < 2) {
+    requestAnimationFrame(detectObjects);
+    return;
+  }
 
-        async function loadModel() {
-          model = await cocoSsd.load();
-          console.log('Model loaded');
-          detectObjects();
-        }
+  const predictions = await model.detect(video);
 
-        function updateField() {
-          const m1Visible = marker1.object3D.visible;
-          const m2Visible = marker2.object3D.visible;
-        
-          if (m1Visible && m2Visible) {
-            const pos1 = marker1.object3D.position;
-            const pos2 = marker2.object3D.position;
-          
-            const center = {
-              x: (pos1.x + pos2.x) / 2,
-              y: (pos1.y + pos2.y) / 2,
-              z: (pos1.z + pos2.z) / 2
-            };
-          
-            const width = Math.abs(pos1.x - pos2.x);
-            const depth = Math.abs(pos1.y - pos2.y);
-          
-            field.setAttribute('position', center);
-            field.setAttribute('rotation', '0 0 0'); 
-            field.setAttribute('scale', `${width} ${depth} 1`);
-            field.setAttribute('visible', true);
-          } else {
-            field.setAttribute('visible', false);
-          }
-        
-          requestAnimationFrame(updateField);
-        }
+  // Очистка предыдущих линий
+  boxesContainer.innerHTML = '';
 
-        updateField();
+  if (field.object3D.visible) {
+    const fieldPos = field.object3D.position;
+    const fieldScale = field.getAttribute('scale');
 
-        async function detectObjects() {
-          const video = document.querySelector('video');
-          if (!model || !video || video.readyState < 2) {
-            requestAnimationFrame(detectObjects);
-            return;
-          }
+    predictions.forEach(pred => {
+      // Преобразуем координаты bbox в [-0.5,0.5] относительно поля
+      const x1 = (pred.bbox[0] / video.videoWidth - 0.5) * fieldScale.x;
+      const x2 = ((pred.bbox[0] + pred.bbox[2]) / video.videoWidth - 0.5) * fieldScale.x;
+      const z1 = (0.5 - pred.bbox[1] / video.videoHeight) * fieldScale.z;
+      const z2 = (0.5 - (pred.bbox[1] + pred.bbox[3]) / video.videoHeight) * fieldScale.z;
 
-          const predictions = await model.detect(video);
+      // Создаем линию вокруг bbox
+      const points = [
+        `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}`,
+        `${fieldPos.x + x2} 0.01 ${fieldPos.z + z1}`,
+        `${fieldPos.x + x2} 0.01 ${fieldPos.z + z2}`,
+        `${fieldPos.x + x1} 0.01 ${fieldPos.z + z2}`,
+        `${fieldPos.x + x1} 0.01 ${fieldPos.z + z1}` // замкнуть контур
+      ].join(',');
 
-          // Очистка предыдущих обводок
-          boxesContainer.innerHTML = '';
+      const line = document.createElement('a-entity');
+      line.setAttribute('line', `points: ${points}; color: red;`);
+      boxesContainer.appendChild(line);
+    });
+  }
 
-          predictions.forEach(pred => {
-            // Проверяем, попадает ли объект в поле
-            if (field.object3D.visible) {
-              const fieldPos = field.object3D.position;
-              const fieldScale = field.getAttribute('scale');
+  requestAnimationFrame(detectObjects);
+}
+</script>
 
-              const x = (pred.bbox[0] + pred.bbox[2]/2 - video.videoWidth/2) / video.videoWidth * fieldScale.x;
-              const z = (pred.bbox[1] + pred.bbox[3]/2 - video.videoHeight/2) / video.videoHeight * fieldScale.z;
-
-              // Добавляем визуальную обводку
-              const box = document.createElement('a-box');
-              box.setAttribute('position', `${fieldPos.x + x} 0.01 ${fieldPos.z + z}`);
-              box.setAttribute('depth', '0.05');
-              box.setAttribute('height', '0.05');
-              box.setAttribute('width', '0.05');
-              box.setAttribute('color', 'red');
-              boxesContainer.appendChild(box);
-            }
-          });
-
-          requestAnimationFrame(detectObjects);
-        }
-
-        loadModel();
-      </script>
     </a-scene>
   </body>
 </html>
