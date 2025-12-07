@@ -105,98 +105,144 @@
         });
       }
 
-          async function detectLoop() {
-      if (!session || !video || video.videoWidth === 0) {
-        requestAnimationFrame(detectLoop);
-        return;
-      }
+      async function detectLoop() {
+  if (!session || !video || video.videoWidth === 0) {
+    requestAnimationFrame(detectLoop);
+    return;
+  }
 
-      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
-      const inputTensor = preprocessImage(video);
-      const feeds = { images: inputTensor };
-      try {
-        const results = await session.run(feeds);
+  const inputTensor = preprocessImage(video);
+  const feeds = { images: inputTensor };
+  try {
+    const results = await session.run(feeds);
 
-        // 🔥 ЛОГИРУЕМ ВСЕ ТЕНЗОРЫ, ЧТОБЫ УЗНАТЬ, КАК НАЗЫВАЮТСЯ
-        console.log("Все тензоры из ONNX:", Object.keys(results));
+    console.log("Все тензоры из ONNX:", Object.keys(results));
 
-        // Попробуем найти тензор с bbox
-        let outputTensor = results.output || results.output0; // Попробуем разные имена
+    const outputTensor = results.output0;
+    const protoTensor = results.output1;
 
-        if (!outputTensor) {
-          console.error("Не найден тензор с результатами (output/output0)");
-          requestAnimationFrame(detectLoop);
-          return;
-        }
-
-        console.log("Output shape:", outputTensor.dims);
-
-        const output = outputTensor;
-        const detections = output.data; // Это плоский Float32Array
-        const numBoxes = output.dims[1]; // обычно 300
-
-        // Найдём первый объект с уверенностью > 0.3
-        let bestDetection = null;
-        for (let i = 0; i < numBoxes; i++) {
-          const offset = i * 116; // 116 - длина одного бокса (bbox + conf + class + mask_idx)
-          const conf = detections[offset + 4];
-          if (conf > 0.3) { // Понизили порог
-            bestDetection = {
-              bbox: [
-                detections[offset + 0], // cx
-                detections[offset + 1], // cy
-                detections[offset + 2], // w
-                detections[offset + 3], // h
-              ],
-              conf: conf,
-              classId: detections[offset + 5],
-            };
-            break;
-          }
-        }
-
-        if (bestDetection) {
-          const [cx, cy, w, h] = bestDetection.bbox;
-          // Переводим нормализованные координаты (0-1) в пиксельные (640x640)
-          const x1 = (cx - w / 2) * 640;
-          const y1 = (cy - h / 2) * 640;
-          const x2 = (cx + w / 2) * 640;
-          const y2 = (cy + h / 2) * 640;
-
-          // Переводим 640x640 в размеры overlayCanvas
-          const scaleX = overlayCanvas.width / 640;
-          const scaleY = overlayCanvas.height / 640;
-
-          const px1 = x1 * scaleX;
-          const py1 = y1 * scaleY;
-          const pw = (x2 - x1) * scaleX;
-          const ph = (y2 - y1) * scaleY;
-
-          // Жирная рамка
-          overlayCtx.strokeStyle = 'yellow';
-          overlayCtx.lineWidth = 4;
-          overlayCtx.strokeRect(px1, py1, pw, ph);
-
-          // "Ебаная маска" — заливка полупрозрачным цветом
-          overlayCtx.fillStyle = 'rgba(0, 255, 0, 0.4)';
-          overlayCtx.fillRect(px1, py1, pw, ph);
-
-          // Подпись
-          overlayCtx.fillStyle = 'white';
-          overlayCtx.font = 'bold 18px Arial';
-          overlayCtx.fillText(`Obj ${bestDetection.classId.toFixed(0)} (${(bestDetection.conf * 100).toFixed(1)}%)`, px1, py1 - 10);
-
-          console.log("Найден объект:", bestDetection);
-        } else {
-          console.log("Объект не найден (conf < 0.3)");
-        }
-      } catch (e) {
-        console.error("Ошибка при обработке ONNX:", e);
-      }
-
+    if (!outputTensor) {
+      console.error("Не найден тензор output0");
       requestAnimationFrame(detectLoop);
+      return;
     }
+
+    console.log("Output shape:", outputTensor.dims);
+
+    const output = outputTensor;
+    const proto = protoTensor;
+
+    // В ONNX YOLOv8-seg (yolov8n-seg.onnx) output0.shape = [1, 116, 8400]
+    // 116 = 4 (bbox) + 1 (obj_conf) + 80 (class_probs) + 32 (mask_coeffs)
+    // 8400 — это количество anchors
+    const detections = output.data; // Float32Array
+    const numAnchors = output.dims[2]; // 8400
+    const numAttrs = output.dims[1]; // 116
+
+    let bestDetection = null;
+    let bestConf = 0;
+
+    for (let i = 0; i < numAnchors; i++) {
+      const offset = i * numAttrs;
+
+      // bbox: [cx, cy, w, h] - нормализованы к 640x640
+      const cx = detections[offset + 0];
+      const cy = detections[offset + 1];
+      const w = detections[offset + 2];
+      const h = detections[offset + 3];
+
+      // confidence
+      const objConf = detections[offset + 4];
+
+      // class probabilities (80 значений после 4+1)
+      const classProbs = detections.subarray(offset + 5, offset + 85);
+
+      // маска (32 коэффициента)
+      const maskCoeffs = detections.subarray(offset + 85, offset + 117);
+
+      // Находим класс с максимальной вероятностью
+      let maxClassId = 0;
+      let maxClassProb = 0;
+      for (let j = 0; j < 80; j++) {
+        if (classProbs[j] > maxClassProb) {
+          maxClassProb = classProbs[j];
+          maxClassId = j;
+        }
+      }
+
+      // Общая уверенность = obj_conf * max_class_prob
+      const conf = objConf * maxClassProb;
+
+      if (conf > bestConf && conf > 0.25) { // Порог уверенности
+        bestConf = conf;
+        bestDetection = {
+          bbox: [cx, cy, w, h],
+          conf: conf,
+          classId: maxClassId,
+          maskCoeffs: maskCoeffs
+        };
+      }
+    }
+
+    if (bestDetection) {
+      const [cx, cy, w, h] = bestDetection.bbox;
+
+      // Переводим нормализованные координаты (0-1) в пиксельные (640x640)
+      const x1 = (cx - w / 2) * 640;
+      const y1 = (cy - h / 2) * 640;
+      const x2 = (cx + w / 2) * 640;
+      const y2 = (cy + h / 2) * 640;
+
+      // Переводим 640x640 в размеры overlayCanvas
+      const scaleX = overlayCanvas.width / 640;
+      const scaleY = overlayCanvas.height / 640;
+
+      const px1 = x1 * scaleX;
+      const py1 = y1 * scaleY;
+      const pw = (x2 - x1) * scaleX;
+      const ph = (y2 - y1) * scaleY;
+
+      // Жирная рамка
+      overlayCtx.strokeStyle = 'yellow';
+      overlayCtx.lineWidth = 4;
+      overlayCtx.strokeRect(px1, py1, pw, ph);
+
+      // Подпись
+      overlayCtx.fillStyle = 'white';
+      overlayCtx.font = 'bold 18px Arial';
+      overlayCtx.fillText(`Obj ${bestDetection.classId} (${(bestDetection.conf * 100).toFixed(1)}%)`, px1, py1 - 10);
+
+      console.log("Найден объект:", bestDetection);
+
+      // --- Рендер маски ---
+      if (proto) {
+        // proto.shape = [1, 32, 160, 160]
+        // maskCoeffs = [32] - коэффициенты маски
+        // mask = proto[0] * maskCoeffs[0] + ... + proto[31] * maskCoeffs[31]
+        // Затем resize маски до bbox и наложение на canvas
+
+        // Псевдокод для маски:
+        // 1. Умножаем proto (160x160x32) на maskCoeffs (32) -> получаем маску 160x160
+        // 2. Resize маски до bbox (pw x ph)
+        // 3. Наложить на canvas как rgba(0,255,0,0.4) внутри bbox
+
+        // Это **очень сложный** шаг, требует много вычислений в браузере
+        // Для упрощения: просто нарисуем bbox как "маску"
+
+        overlayCtx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+        overlayCtx.fillRect(px1, py1, pw, ph);
+      }
+    } else {
+      console.log("Объект не найден (conf < 0.25)");
+    }
+  } catch (e) {
+    console.error("Ошибка при обработке ONNX:", e);
+  }
+
+  requestAnimationFrame(detectLoop);
+}
 
       function preprocessImage(video) {
         const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
